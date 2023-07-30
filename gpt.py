@@ -1,195 +1,176 @@
 import openai
 import json
-import tkinter as tk
-from openai.error import OpenAIError
-from tkinter import simpledialog, messagebox
+import markdown
 
-class ChatApp:
+from PyQt5.QtWidgets import QApplication, QGridLayout, QListWidget, QPushButton, QWidget, QPlainTextEdit, QTextBrowser, QInputDialog
+from PyQt5.QtCore import pyqtSlot, QThread, pyqtSignal, QObject, QEvent
+from openai.error import OpenAIError
+
+class OpenAIAPIThread(QThread):
+    response_received = pyqtSignal(str)
+    error_occurred = pyqtSignal(OpenAIError)
+
     def __init__(self):
-        # load the API key
+        super().__init__()
+        #load the api key 
         with open('not-an-api-key.txt', 'r') as file:
             openai.api_key = file.read()
 
-        self.fileName = "chat_history.json"
-
-        self.chat_histories = {}
-        self.current_chat = "chat1"
-
-        self.root = tk.Tk()
-        self.root.title("Chat with AI")
-        self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
-
-        scrollbar = tk.Scrollbar(self.root)
-        scrollbar.grid(column=1, row=0, sticky='ns')
-
-        self.chat_history = tk.Text(self.root, wrap='word', yscrollcommand=scrollbar.set)
-        self.chat_history.configure(exportselection=True) # enable text selection 
-        self.chat_history.grid(column=0, row=0, sticky='nsew')
-
-        # Link the scrollbar to the chat window
-        scrollbar.config(command=self.chat_history.yview)
-
-        # Configure tags
-        self.chat_history.tag_config("user_role", foreground="blue", background="light gray", font=("Helvetica", 10, "bold"))
-        self.chat_history.tag_config("assistant_role", foreground="red", background="white", font=("Helvetica", 10, "bold"))
-        self.chat_history.tag_config("user_content", foreground="black", background="light gray")
-
-        # Add a list box for selecting chat histories
-        self.chat_listbox = tk.Listbox(self.root)
-        self.chat_listbox.grid(column=2, row=0, sticky='nsew')
-        #self.chat_listbox.bind('<<ListboxSelect>>', self.load_selected_chat)
-        self.chat_listbox.bind('<<ListboxSelect>>', self.load_selected_chat_if_focused)
-
-        # Add buttons for adding and deleting chats
-        add_chat_button = tk.Button(self.root, text="Add Chat", command=self.add_chat)
-        add_chat_button.grid(column=2, row=1, sticky='nsew')
-        delete_chat_button = tk.Button(self.root, text="Delete Chat", command=self.delete_chat)
-        delete_chat_button.grid(column=2, row=2, sticky='nsew')
-        rename_chat_button = tk.Button(self.root, text="Rename Chat", command=self.rename_chat)
-        rename_chat_button.grid(column=2, row=3, sticky='nsew')
-        
-
-        # Load chat histories file
-        self.load_chat_histories(self.fileName)
-
-        self.user_input = tk.Text(self.root, height=5)
-        self.user_input.grid(column=0, row=1, sticky='nsew')
-        self.user_input.bind("<Return>", self.send_message)
-
-        # Configure column and row weights
-        self.root.grid_columnconfigure(0, weight=1)  # the first column should expand
-        self.root.grid_rowconfigure(0, weight=1)  # the first row should expand
-
-        self.root.mainloop()
-
-    def load_chat_histories(self, filename):
-        # Load all chat histories from the selected file
+    def run(self, chat_history):
         try:
-            with open(filename, 'r') as f:
+            response = openai.ChatCompletion.create(
+                model="gpt-3.5-turbo",
+                messages=chat_history  # Pass the entire conversation history
+            )
+            ai_message = {"role": "assistant", "content": response['choices'][0]['message']['content']}
+            self.response_received.emit(ai_message)
+        except OpenAIError as e:
+            self.error_occurred.emit(e)
+
+class ChatHistory(QObject):
+    chat_updated = pyqtSignal()
+    chat_histories_update = pyqtSignal()
+
+    def __init__(self):
+        super().__init__()
+        self.fileName = "chat_history.json"
+        self.init_chat()
+    
+    def init_chat(self):
+        self.html_head = ""
+        self.html_chat = ""
+        self.html_tail = ""
+        self.chat_histories = {}
+        self.current_chat = ""
+
+    def load_chat_file(self):
+        # Load all chat histories from the file
+        try:
+            with open(self.fileName, 'r') as f:
                 self.chat_histories = json.load(f)
         except FileNotFoundError:
-            self.chat_histories = {"chat1": [{"role": "system", "content": "You are a helpful assistant."}]}
-
-        # Populate the list box with chat history names
-        self.chat_listbox.delete(0, tk.END)  # clear the list box
-        for chat_name in self.chat_histories.keys():
-            self.chat_listbox.insert(tk.END, chat_name)
-
-        # Load the first chat history
-        self.load_selected_chat()
-
-    def load_selected_chat(self, event=None):
-        # Get the selected chat history
-        selection = self.chat_listbox.curselection()
-        if selection:
-            self.current_chat = self.chat_listbox.get(selection[0])
-        else:
-            # If nothing is selected, default to the first chat history
-            self.current_chat = list(self.chat_histories.keys())[0]
-
-        # Clear the current chat display
-        self.chat_history.delete('1.0', tk.END)
-
-        # Display the selected chat history
-        for message in self.chat_histories[self.current_chat]:
-            self.add_message_to_chat(message)
-
-    def send_message(self, event=None):
-        # Check if the event was a keypress event and the Shift key was being held down
-        if event and event.state & 0x1:
-            return  # don't send the message if the Shift key was held down
-
-        message_content = self.user_input.get("1.0", "end-1c")
-        if message_content.strip() != "":  # only send the message if it's not empty
-            message = {"role": "user", "content": message_content}
-            self.add_message_to_chat(message)
-            self.user_input.delete("1.0", tk.END)
-
-            self.chat_histories[self.current_chat].append(message)
-
-            try:
-                response = openai.ChatCompletion.create(
-                    model="gpt-3.5-turbo",
-                    messages=self.chat_histories[self.current_chat]  # Pass the entire conversation history
-                )
-                ai_message = {"role": "assistant", "content": response['choices'][0]['message']['content']}
-
-                self.add_message_to_chat(ai_message)
-                self.chat_histories[self.current_chat].append(ai_message)
-
-            except OpenAIError as e:
-                self.chat_history.insert(tk.END, 'Error: ' + str(e) + '\n')
-
-            return "break"  # prevent the default behavior of the Enter key
-
-    def on_closing(self):
-        # Save all chat histories to JSON file
+                #default chat
+                self.chat_histories = {"chat1": [{"role": "system", "content": "You are a helpful assistant."}]}
+                self.current_chat = "chat1"
+        self.chat_histories_update.emit()
+    
+    def save_chat_file(self):
         with open(self.fileName, 'w') as f:
             json.dump(self.chat_histories, f)
-        self.root.destroy()
+    
+    def send_api_message(self, user_msg):
+        if user_msg.strip() != "":  # only send the message if it's not empty
+            message = {"role": "user", "content": user_msg}
 
-    def add_chat(self):
-        # Prompt the user for a new chat name
-        new_chat_name = simpledialog.askstring("New Chat", "Enter name for new chat:")
-        if new_chat_name:
-            if new_chat_name in self.chat_histories:
-                messagebox.showerror("Error", "A chat with that name already exists.")
-            else:
-                self.chat_histories[new_chat_name] = []
-                self.chat_listbox.insert(tk.END, new_chat_name)
+            self.thread = OpenAIAPIThread(message)
+            self.thread.response_received.connect(self.handle_api_message)
+            self.thread.error_occurred.connect(self.handle_api_error)
+            self.thread.start()
 
-    def delete_chat(self):
-        # Delete the currently selected chat
-        selection = self.chat_listbox.curselection()
-        if selection:
-            chat_name = self.chat_listbox.get(selection[0])
-            if messagebox.askyesno("Delete Chat", f"Are you sure you want to delete {chat_name}? This cannot be undone."):
-                del self.chat_histories[chat_name]
-                self.chat_listbox.delete(selection[0])
-                
-                # Check if all chat histories are deleted
-                if len(self.chat_histories) == 0:
-                    # If so, recreate a default chat history
-                    default_chat_name = "chat1"
-                    self.chat_histories[default_chat_name] = [{"role": "system", "content": "You are a helpful assistant."}]
-                    self.chat_listbox.insert(tk.END, default_chat_name)
+    def switch_to_chat(self, selectedchat):
+        self.current_chat = selectedchat
+        self.html_chat = ""
+        for message in self.chat_histories[selectedchat]:
+            self.html_chat += self.convert_msg_to_html(message)
+        self.chat_updated.emit()
 
     def add_message_to_chat(self, message):
-        role = message['role'].capitalize()
+        self.chat_histories[self.current_chat].append(message)
+        self.html_chat += self.convert_msg_to_html(message)
+        self.chat_updated.emit()
+    
+    def convert_msg_to_html(self, message):
+        role = message['role'].lower()
         content = message['content']
-
-        # Insert the role part of the text with the role tag
-        if role.lower() == "user":
-            self.chat_history.insert(tk.END, f"{role}: ", "user_role")
+        
+        if role == "user":
+            color = "blue"
+        elif role == "assistant":
+            color = "red"
         else:
-            self.chat_history.insert(tk.END, f"{role}: ", "assistant_role")
+            color = "black"
 
-        # Insert the content part of the text with the content tag
-        if role.lower() == "user":
-            self.chat_history.insert(tk.END, f"{content}\n", "user_content")
-        else:
-            self.chat_history.insert(tk.END, f"{content}\n")
+        return markdown.markdown(f"<b style='color:{color};'>{role}:</b> {content}", extras=["fenced-code-blocks"])
 
-    def rename_chat(self):
-        # Prompt the user for a new chat name
-        new_chat_name = simpledialog.askstring("Rename Chat", "Enter new name for the chat:")
-        if new_chat_name:
-            if new_chat_name in self.chat_histories:
-                messagebox.showerror("Error", "A chat with that name already exists.")
-            else:
-                # Get the currently selected chat
-                selection = self.chat_listbox.curselection()
-                if selection:
-                    old_chat_name = self.chat_listbox.get(selection[0])
-                    # Rename the chat in the chat_histories dictionary
-                    self.chat_histories[new_chat_name] = self.chat_histories.pop(old_chat_name)
-                    # Update the name in the listbox
-                    self.chat_listbox.delete(selection[0])
-                    self.chat_listbox.insert(selection[0], new_chat_name)
+    #def add_new_chat(self):
+    #def rename_chat(self):
+    #def delete_chat(self):
+    #def select_chat(self):
 
-    def load_selected_chat_if_focused(self, event=None):
-        if self.chat_listbox is self.root.focus_get():
-            self.load_selected_chat()
+    @pyqtSlot()
+    def handle_api_message(self, ai_message):
+        self.add_message_to_chat(ai_message)
+        self.chat_histories[self.current_chat].append(ai_message)
 
-if __name__ == "__main__":
-    app = ChatApp()
+    @pyqtSlot()
+    def handle_api_error(self, error):
+        self.chat_history.insert('Error: ' + str(error))
+    
+class MainWindow(QWidget):
+    def __init__(self):
+        super(MainWindow, self).__init__()
+        self.init_ui()
+        self.chat_obj = ChatHistory()
+        
+        self.chat_obj.chat_updated.connect(self.update_chat_display)
+        self.chat_obj.chat_histories_update.connect(self.populate_chat_histories_listbox)
+
+        self.chat_obj.load_chat_file()
+
+    def init_ui(self):
+        layout = QGridLayout()
+        self.button_add_chat = QPushButton("Add Chat")
+        self.button_rename_chat = QPushButton("Rename Chat")
+        self.button_delete_chat = QPushButton("Delete Chat")
+        self.button_send_chat = QPushButton("Send")
+        self.text_user_input = QPlainTextEdit()
+        self.list_chat_histories = QListWidget()
+        self.browser_chat_html = QTextBrowser()
+
+        #send the chatname to select_chat_history() when the chatlist is clicked
+        self.list_chat_histories.itemClicked.connect(lambda item: self.select_chat_history(item.text()))
+
+        #construct the layout of the GUI
+        chat_list_left = 14
+        button_width = 2
+        layout.addWidget(self.browser_chat_html, 0, 0, 9, chat_list_left)  
+        layout.addWidget(self.list_chat_histories, 0, chat_list_left, 6, button_width)  
+        layout.addWidget(self.text_user_input, 9, 0, 3, chat_list_left)
+        layout.addWidget(self.button_send_chat, 9, chat_list_left, 3, button_width) 
+        layout.addWidget(self.button_add_chat, 6, chat_list_left, 1, button_width)
+        layout.addWidget(self.button_rename_chat, 7, chat_list_left, 1, button_width) 
+        layout.addWidget(self.button_delete_chat, 8, chat_list_left, 1, button_width)
+        self.setLayout(layout)
+
+    def closeEvent(self, event: QEvent):
+        self.chat_obj.save_chat_file()
+        super().closeEvent(event)
+
+    @pyqtSlot()
+    def select_chat_history(self, clickedname):
+        self.chat_obj.switch_to_chat(clickedname)
+
+    @pyqtSlot()
+    def populate_chat_histories_listbox(self):
+        self.list_chat_histories.clear()
+        for chat_name in self.chat_obj.chat_histories.keys():
+            self.list_chat_histories.addItem(chat_name)
+
+    @pyqtSlot()
+    def update_chat_display(self):
+        self.browser_chat_html.setHtml(self.chat_obj.html_head +
+                                       self.chat_obj.html_chat +
+                                       self.chat_obj.html_tail )
+
+    @pyqtSlot()
+    def get_response(self):
+        self.button.setEnabled(False)
+        self.thread = OpenAIAPIThread("Hello, how are you?")
+        self.thread.response_received.connect(self.update_label)
+        self.thread.start()
+
+if __name__ == '__main__':
+    app = QApplication([])
+    window = MainWindow()
+    window.show()
+    app.exec_()
