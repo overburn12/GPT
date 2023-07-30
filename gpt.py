@@ -2,7 +2,7 @@ import openai
 import json
 import markdown
 
-from PyQt5.QtWidgets import QApplication, QGridLayout, QListWidget, QPushButton, QWidget, QPlainTextEdit, QTextBrowser, QInputDialog
+from PyQt5.QtWidgets import QApplication, QGridLayout, QListWidget, QPushButton, QWidget, QPlainTextEdit, QTextBrowser, QInputDialog, QMessageBox
 from PyQt5.QtCore import pyqtSlot, QThread, pyqtSignal, QObject, QEvent
 from openai.error import OpenAIError
 
@@ -92,10 +92,16 @@ class ChatHistory(QObject):
 
         return markdown.markdown(f"<b style='color:{color};'>{role}:</b> {content}", extras=["fenced-code-blocks"])
 
-    #def add_new_chat(self):
+    def add_new_chat(self, chatname):
+        self.chat_histories[chatname] = [{"role": "system", "content": "You are a helpful assistant."}]
+        self.switch_to_chat(chatname)
+
     #def rename_chat(self):
-    #def delete_chat(self):
-    #def select_chat(self):
+
+    def delete_chat(self, chatname):
+        del self.chat_histories[chatname]
+        if not self.chat_histories:
+            self.add_new_chat("chat 1")
 
     @pyqtSlot()
     def handle_api_message(self, ai_message):
@@ -129,6 +135,8 @@ class MainWindow(QWidget):
 
         #send the chatname to select_chat_history() when the chatlist is clicked
         self.list_chat_histories.itemClicked.connect(lambda item: self.select_chat_history(item.text()))
+        self.button_add_chat.clicked.connect(self.add_new_chat)
+        self.button_delete_chat.clicked.connect(self.delete_selected_chat)
 
         #construct the layout of the GUI
         chat_list_left = 14
@@ -145,6 +153,32 @@ class MainWindow(QWidget):
     def closeEvent(self, event: QEvent):
         self.chat_obj.save_chat_file()
         super().closeEvent(event)
+
+    @pyqtSlot()
+    def delete_selected_chat(self):
+        if self.list_chat_histories.selectedItems():
+            reply = QMessageBox.question(None, "Delete chat", "Are you sure you want to delete the selected chat?", QMessageBox.Yes | QMessageBox.No)
+            if reply == QMessageBox.No:
+                return
+            selected_item = self.list_chat_histories.selectedItems()[0]
+            chatname = selected_item.text()
+            item = self.list_chat_histories.takeItem(self.list_chat_histories.row(selected_item))
+            del item
+            self.chat_obj.delete_chat(chatname)
+            self.list_chat_histories.setCurrentRow(0)
+            self.chat_obj.switch_to_chat(self.list_chat_histories.item(0).text())
+        else:
+            QMessageBox.warning(None, "Problem", "Cannot delete chat. No chat currently selected.")                
+
+    @pyqtSlot()
+    def add_new_chat(self):
+        new_chat_name, ok = QInputDialog.getText(None, "New chat", "Enter the name of the new chat:")
+        if ok:
+            if new_chat_name not in self.chat_obj.chat_histories:
+                self.list_chat_histories.addItem(new_chat_name)
+                self.chat_obj.add_new_chat(new_chat_name)
+            else: 
+                QMessageBox.warning(None, "Duplicate chat name", "The chat name is already used. Please choose a different name.")            
 
     @pyqtSlot()
     def select_chat_history(self, clickedname):
