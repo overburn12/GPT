@@ -19,8 +19,9 @@ This Python application provides a graphical user interface for chatting with Op
 ## How to Run
 
 The application can be run as a standard Python script:
+```
 python gpt.py
-
+```
 ## Structure of the Code
 
 The code is structured into several classes:
