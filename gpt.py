@@ -216,13 +216,6 @@ class MainWindow(QWidget):
                                        self.chat_obj.html_chat +
                                        self.chat_obj.html_tail )
 
-    @pyqtSlot()
-    def get_response(self):
-        self.button.setEnabled(False)
-        self.thread = OpenAIAPIThread("Hello, how are you?")
-        self.thread.response_received.connect(self.update_label)
-        self.thread.start()
-
 if __name__ == '__main__':
     app = QApplication([])
     window = MainWindow()
