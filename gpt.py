@@ -13,14 +13,14 @@ class OpenAIAPIThread(QThread):
     def __init__(self, chat_history):
         super().__init__()
         self.chat_history = chat_history
-        #load the api key 
-        with open('not-an-api-key.txt', 'r') as file:
+        self.use_model = "gpt-3.5-turbo" 
+        with open("api-key.txt", 'r') as file:
             openai.api_key = file.read()
 
     def run(self):
         try:
             response = openai.ChatCompletion.create(
-                model="gpt-3.5-turbo",
+                model=self.use_model,
                 messages=self.chat_history  # Pass the entire conversation history
             )
             ai_message = {"role": "assistant", "content": response['choices'][0]['message']['content']}
@@ -82,7 +82,7 @@ class ChatHistory(QObject):
     
     def convert_msg_to_html(self, message):
         role = message['role'].lower()
-        content = message['content'].replace('\n', '<br>')
+        content = message['content']#.replace('\n', '<br>')
         
         if role == "user":
             color = "blue"
@@ -109,9 +109,10 @@ class ChatHistory(QObject):
     def handle_api_message(self, ai_message):
         self.add_message_to_chat(ai_message)
 
-    @pyqtSlot()
+    @pyqtSlot(dict)
     def handle_api_error(self, error):
-        self.html_chat += self.convert_msg_to_html('Error: ' + str(error))
+        error_msg =  {"role": "ERROR", "content": str(error)}
+        self.html_chat += self.convert_msg_to_html(error_msg)
         self.chat_updated.emit()
 
 class MyTextEdit(QPlainTextEdit):
@@ -141,27 +142,26 @@ class MainWindow(QWidget):
         self.button_add_chat = QPushButton("Add Chat")
         self.button_rename_chat = QPushButton("Rename Chat")
         self.button_delete_chat = QPushButton("Delete Chat")
-        self.button_send_chat = QPushButton("Send")
         self.text_user_input =  MyTextEdit(self)
         self.list_chat_histories = QListWidget()
         self.browser_chat_html = QTextBrowser()
 
-        #send the chatname to select_chat_history() when the chatlist is clicked
         self.list_chat_histories.itemClicked.connect(lambda item: self.select_chat_history(item.text()))
         self.button_add_chat.clicked.connect(self.add_new_chat)
         self.button_delete_chat.clicked.connect(self.delete_selected_chat)
-        self.button_send_chat.clicked.connect(self.send_chat_message)
+
+        #self.list_chat_histories.setFixedWidth(200)
 
         #construct the layout of the GUI
         chat_list_left = 14
         button_width = 2
-        layout.addWidget(self.browser_chat_html, 0, 0, 9, chat_list_left)  
-        layout.addWidget(self.list_chat_histories, 0, chat_list_left, 6, button_width)  
-        layout.addWidget(self.text_user_input, 9, 0, 3, chat_list_left)
-        layout.addWidget(self.button_send_chat, 9, chat_list_left, 3, button_width) 
-        layout.addWidget(self.button_add_chat, 6, chat_list_left, 1, button_width)
-        layout.addWidget(self.button_rename_chat, 7, chat_list_left, 1, button_width) 
-        layout.addWidget(self.button_delete_chat, 8, chat_list_left, 1, button_width)
+        chat_list_height = 9
+        layout.addWidget(self.browser_chat_html, 0, 0, chat_list_height, chat_list_left)  
+        layout.addWidget(self.list_chat_histories, 0, chat_list_left, chat_list_height, button_width)  
+        layout.addWidget(self.text_user_input, chat_list_height, 0, 3, chat_list_left)
+        layout.addWidget(self.button_add_chat, chat_list_height, chat_list_left, 1, button_width)
+        layout.addWidget(self.button_rename_chat, chat_list_height+1, chat_list_left, 1, button_width) 
+        layout.addWidget(self.button_delete_chat, chat_list_height+2, chat_list_left, 1, button_width)
         self.setLayout(layout)
 
     def closeEvent(self, event: QEvent):
