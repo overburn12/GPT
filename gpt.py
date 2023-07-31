@@ -3,24 +3,25 @@ import json
 import markdown
 
 from PyQt5.QtWidgets import QApplication, QGridLayout, QListWidget, QPushButton, QWidget, QPlainTextEdit, QTextBrowser, QInputDialog, QMessageBox
-from PyQt5.QtCore import pyqtSlot, QThread, pyqtSignal, QObject, QEvent
+from PyQt5.QtCore import pyqtSlot, QThread, pyqtSignal, QObject, QEvent, Qt
 from openai.error import OpenAIError
 
 class OpenAIAPIThread(QThread):
-    response_received = pyqtSignal(str)
+    response_received = pyqtSignal(dict)
     error_occurred = pyqtSignal(OpenAIError)
 
-    def __init__(self):
+    def __init__(self, chat_history):
         super().__init__()
+        self.chat_history = chat_history
         #load the api key 
         with open('not-an-api-key.txt', 'r') as file:
             openai.api_key = file.read()
 
-    def run(self, chat_history):
+    def run(self):
         try:
             response = openai.ChatCompletion.create(
                 model="gpt-3.5-turbo",
-                messages=chat_history  # Pass the entire conversation history
+                messages=self.chat_history  # Pass the entire conversation history
             )
             ai_message = {"role": "assistant", "content": response['choices'][0]['message']['content']}
             self.response_received.emit(ai_message)
@@ -61,8 +62,8 @@ class ChatHistory(QObject):
     def send_api_message(self, user_msg):
         if user_msg.strip() != "":  # only send the message if it's not empty
             message = {"role": "user", "content": user_msg}
-
-            self.thread = OpenAIAPIThread(message)
+            self.add_message_to_chat(message)
+            self.thread = OpenAIAPIThread(self.chat_histories[self.current_chat])
             self.thread.response_received.connect(self.handle_api_message)
             self.thread.error_occurred.connect(self.handle_api_error)
             self.thread.start()
@@ -81,7 +82,7 @@ class ChatHistory(QObject):
     
     def convert_msg_to_html(self, message):
         role = message['role'].lower()
-        content = message['content']
+        content = message['content'].replace('\n', '<br>')
         
         if role == "user":
             color = "blue"
@@ -94,6 +95,7 @@ class ChatHistory(QObject):
 
     def add_new_chat(self, chatname):
         self.chat_histories[chatname] = [{"role": "system", "content": "You are a helpful assistant."}]
+        self.chat_histories_update.emit()
         self.switch_to_chat(chatname)
 
     #def rename_chat(self):
@@ -103,15 +105,26 @@ class ChatHistory(QObject):
         if not self.chat_histories:
             self.add_new_chat("chat 1")
 
-    @pyqtSlot()
+    @pyqtSlot(dict)
     def handle_api_message(self, ai_message):
         self.add_message_to_chat(ai_message)
-        self.chat_histories[self.current_chat].append(ai_message)
 
     @pyqtSlot()
     def handle_api_error(self, error):
-        self.chat_history.insert('Error: ' + str(error))
-    
+        self.html_chat += self.convert_msg_to_html('Error: ' + str(error))
+        self.chat_updated.emit()
+
+class MyTextEdit(QPlainTextEdit):
+    def __init__(self, *args, **kwargs):
+        super(MyTextEdit, self).__init__(*args, **kwargs)
+        self.setPlaceholderText('Enter your message here...')
+
+    def keyPressEvent(self, e):
+        if e.key() == Qt.Key_Return and not e.modifiers() & Qt.ShiftModifier:
+            self.parent().send_chat_message()  # call the send_message method when Enter is pressed without Shift
+        else:
+            super().keyPressEvent(e)  # default behaviour
+
 class MainWindow(QWidget):
     def __init__(self):
         super(MainWindow, self).__init__()
@@ -129,7 +142,7 @@ class MainWindow(QWidget):
         self.button_rename_chat = QPushButton("Rename Chat")
         self.button_delete_chat = QPushButton("Delete Chat")
         self.button_send_chat = QPushButton("Send")
-        self.text_user_input = QPlainTextEdit()
+        self.text_user_input =  MyTextEdit(self)
         self.list_chat_histories = QListWidget()
         self.browser_chat_html = QTextBrowser()
 
@@ -137,6 +150,7 @@ class MainWindow(QWidget):
         self.list_chat_histories.itemClicked.connect(lambda item: self.select_chat_history(item.text()))
         self.button_add_chat.clicked.connect(self.add_new_chat)
         self.button_delete_chat.clicked.connect(self.delete_selected_chat)
+        self.button_send_chat.clicked.connect(self.send_chat_message)
 
         #construct the layout of the GUI
         chat_list_left = 14
@@ -155,6 +169,12 @@ class MainWindow(QWidget):
         super().closeEvent(event)
 
     @pyqtSlot()
+    def send_chat_message(self):
+        user_message = self.text_user_input.toPlainText()
+        self.chat_obj.send_api_message(user_message)
+        self.text_user_input.clear()
+
+    @pyqtSlot()
     def delete_selected_chat(self):
         if self.list_chat_histories.selectedItems():
             reply = QMessageBox.question(None, "Delete chat", "Are you sure you want to delete the selected chat?", QMessageBox.Yes | QMessageBox.No)
@@ -165,8 +185,8 @@ class MainWindow(QWidget):
             item = self.list_chat_histories.takeItem(self.list_chat_histories.row(selected_item))
             del item
             self.chat_obj.delete_chat(chatname)
-            self.list_chat_histories.setCurrentRow(0)
-            self.chat_obj.switch_to_chat(self.list_chat_histories.item(0).text())
+            #self.list_chat_histories.setCurrentRow(0)
+            #self.chat_obj.switch_to_chat(self.list_chat_histories.item(0).text())
         else:
             QMessageBox.warning(None, "Problem", "Cannot delete chat. No chat currently selected.")                
 
